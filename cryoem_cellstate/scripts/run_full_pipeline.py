@@ -1,10 +1,13 @@
 """End-to-end pipeline runner.
 
 Chains all six stages and writes a final Markdown report.
+All SSL models (MAE, DINO, Cryo-IEF) use pretrained weights — no training step.
+Swin UNETR must be fine-tuned separately via ``train_unet_lightning.py``.
 
 Usage::
 
-    python scripts/run_full_pipeline.py --config configs/default.yaml
+    python scripts/run_full_pipeline.py
+    python scripts/run_full_pipeline.py --skip-stage1 --skip-stage2 --skip-stage3
 """
 
 from __future__ import annotations
@@ -16,7 +19,6 @@ from pathlib import Path
 import click
 import numpy as np
 import pandas as pd
-
 from src.utils.config import load_config
 from src.utils.seed import seed_everything
 
@@ -28,10 +30,10 @@ logger = logging.getLogger(__name__)
 
 def _run_stage1(cfg: object) -> None:
     """Stage 1: Preprocessing."""
-    from src.preprocessing.run_preprocess import preprocess_image, _load_image
+    import pandas as pd
+    from src.preprocessing.run_preprocess import _load_image, preprocess_image
     from src.utils.plots import plot_qa_gallery
     from src.utils.reporting import save_noise_report
-    import pandas as pd
 
     raw_path = Path(cfg.data.raw_dir)  # type: ignore[attr-defined]
     processed_path = Path(cfg.data.processed_dir)  # type: ignore[attr-defined]
@@ -121,18 +123,12 @@ def _run_stage4(cfg: object, cells_df: pd.DataFrame) -> pd.DataFrame:
 
 
 def _run_stage3_extract(cfg: object) -> np.ndarray:
-    """Stage 3: extract embeddings (assumes SimCLR already trained)."""
-    embeddings_path = Path(cfg.project.results_dir) / "embeddings.npy"  # type: ignore[attr-defined]
-    if not embeddings_path.exists():
-        logger.warning(
-            "Embeddings not found at %s. Run train_simclr.py first, "
-            "then extract_embeddings.py. Using random placeholder.",
-            embeddings_path,
-        )
-        n = 100
-        embeddings = np.random.default_rng(42).normal(size=(n, 512)).astype(np.float32)
-        np.save(embeddings_path, embeddings)
-    return np.load(embeddings_path)
+    """Stage 3: extract SSL embeddings using the configured pretrained model."""
+    from src.ssl.run_ssl import extract_embeddings
+
+    active_model: str = getattr(cfg.ssl, "active_model", "mae")  # type: ignore[attr-defined]
+    logger.info("Stage 3: extracting embeddings with model=%s", active_model)
+    return extract_embeddings(cfg, model=active_model)
 
 
 def _run_stage5(
@@ -292,7 +288,7 @@ def _write_report(
 @click.option(
     "--skip-stage3",
     is_flag=True,
-    help="Skip SSL training (use existing embeddings.npy).",
+    help="Skip SSL embedding extraction (requires existing results/embeddings.npy).",
 )
 def main(
     config: str | None,
@@ -324,9 +320,14 @@ def main(
     logger.info("=== Stage 4: Morphometrics ===")
     morph_df = _run_stage4(cfg, cells_df)
 
-    # Stage 3 (SSL — training must be done separately; here we just load/extract)
-    logger.info("=== Stage 3: SSL embedding extraction ===")
-    embeddings = _run_stage3_extract(cfg)
+    # Stage 3 (SSL embedding extraction using pretrained models)
+    embeddings_path = Path(cfg.project.results_dir) / "embeddings.npy"  # type: ignore[attr-defined]
+    if not skip_stage3:
+        logger.info("=== Stage 3: SSL embedding extraction ===")
+        embeddings = _run_stage3_extract(cfg)
+    else:
+        embeddings = np.load(embeddings_path)
+        logger.info("Stage 3 skipped — loaded %d embeddings from %s", len(embeddings), embeddings_path)
 
     # Align embeddings with morph_df (trim / pad if lengths differ)
     n_min = min(len(embeddings), len(morph_df))

@@ -225,6 +225,7 @@ __marimo__/
 
 # Claude
 .claude/
+CLAUDE.md
 
 # Project related
 results/

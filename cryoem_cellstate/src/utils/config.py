@@ -75,13 +75,13 @@ class ClassicalSegConfig(BaseModel):
     watershed: bool = True
 
 
-class UNETRConfig(BaseModel):
-    feature_size: int = 16
-    hidden_size: int = 768
-    mlp_dim: int = 3072
-    num_heads: int = 12
-    pos_embed: str = "conv"
-    dropout_rate: float = 0.0
+class SwinUNETRConfig(BaseModel):
+    feature_size: int = 48
+    depths: list[int] = [2, 2, 2, 2]
+    num_heads: list[int] = [3, 6, 12, 24]
+    drop_rate: float = 0.0
+    attn_drop_rate: float = 0.0
+    use_checkpoint: bool = False
 
 
 class UNetConfig(BaseModel):
@@ -91,7 +91,7 @@ class UNetConfig(BaseModel):
     batch_size: int = 4
     epochs: int = 50
     val_fraction: float = 0.15
-    unetr: UNETRConfig = UNETRConfig()
+    swin_unetr: SwinUNETRConfig = SwinUNETRConfig()
 
 
 class CropCellsConfig(BaseModel):
@@ -118,28 +118,30 @@ class AugmentationConfig(BaseModel):
     gaussian_noise_std: float = 0.05
 
 
-class SimCLRConfig(BaseModel):
-    temperature: float = 0.07
-    lr: float = 3e-4
-    batch_size: int = 256
-    epochs: int = 200
-    projection_dim: int = 128
-    augmentation: AugmentationConfig = AugmentationConfig()
-
-
 class MAEConfig(BaseModel):
-    mask_ratio: float = 0.75
-    lr: float = 1.5e-4
+    backbone: str = "hf_hub:timm/vit_base_patch16_224.mae_in1k"
+    image_size: int = 224
     batch_size: int = 64
-    epochs: int = 100
+
+
+class RotNetConfig(BaseModel):
+    backbone: str = "hf_hub:timm/vit_base_patch16_224.dino"
+    image_size: int = 224
+    batch_size: int = 64
+
+
+class CryoIEFConfig(BaseModel):
+    model_name: str = "westlake-repl/Cryo-IEF"
+    image_size: int = 224
+    batch_size: int = 64
 
 
 class SSLConfig(BaseModel):
-    backbone: str = "resnet18"
-    embedding_dim: int = 128
-    simclr: SimCLRConfig = SimCLRConfig()
-    mae: MAEConfig = MAEConfig()
+    active_model: str = "mae"
     checkpoints_dir: str = "results/ssl_checkpoints"
+    mae: MAEConfig = MAEConfig()
+    rotnet: RotNetConfig = RotNetConfig()
+    cryo_ief: CryoIEFConfig = CryoIEFConfig()
 
 
 # ── Stage 4 ───────────────────────────────────────────────────────────────────

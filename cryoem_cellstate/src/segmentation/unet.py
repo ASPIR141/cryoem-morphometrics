@@ -1,60 +1,73 @@
-"""UNETR model for cell segmentation using MONAI.
+"""Swin UNETR model for cell segmentation using MONAI.
 
-Uses ``monai.networks.nets.UNETR`` (ViT encoder + CNN decoder) and
-``monai.losses.DiceCELoss`` as the training objective.
+Uses ``monai.networks.nets.SwinUNETR`` (Swin Transformer encoder + CNN decoder)
+and ``monai.losses.DiceCELoss`` as the training objective.
 
-Reference: Hatamizadeh et al., "UNETR: Transformers for 3D Medical Image
-Segmentation", WACV 2022.
+Swin UNETR advantages over plain UNETR:
+- Hierarchical shifted-window attention → better local-global feature balance
+- Lower memory footprint at the same spatial resolution
+- Stronger inductive bias for dense prediction tasks
+
+Reference: Tang et al., "Self-Supervised Pre-Training of Swin Transformers
+for 3D Medical Image Analysis", CVPR 2022.
 """
 
 from __future__ import annotations
 
 import logging
+from pathlib import Path
 
+import torch
 import torch.nn as nn
 from monai.losses import DiceCELoss
-from monai.networks.nets import UNETR
+from monai.networks.nets import SwinUNETR
 
 logger = logging.getLogger(__name__)
 
 
-def build_unetr(
+def build_swin_unetr(
     img_size: int = 256,
     in_channels: int = 1,
     out_channels: int = 1,
-    feature_size: int = 16,
-    hidden_size: int = 768,
-    mlp_dim: int = 3072,
-    num_heads: int = 12,
-    pos_embed: str = "conv",
-    dropout_rate: float = 0.0,
+    feature_size: int = 48,
+    depths: tuple[int, ...] = (2, 2, 2, 2),
+    num_heads: tuple[int, ...] = (3, 6, 12, 24),
+    drop_rate: float = 0.0,
+    attn_drop_rate: float = 0.0,
+    use_checkpoint: bool = False,
+    weights_path: str | Path | None = None,
 ) -> nn.Module:
-    """Construct a 2-D MONAI UNETR for binary cell segmentation.
-
-    UNETR uses a Vision Transformer as the encoder and a CNN decoder with
-    skip connections.  The input spatial size must be divisible by the ViT
-    patch size (16 by default).
+    """Construct a 2-D MONAI SwinUNETR for binary cell segmentation.
 
     Parameters
     ----------
     img_size:
-        Square spatial size of the input image.  Must be divisible by 16.
+        Square spatial size of the input image (must be divisible by
+        ``32 = 2^5`` for the 4-stage Swin hierarchy).
     in_channels:
         Input channels (1 for grayscale CryoEM images).
     out_channels:
         Output channels (1 for binary segmentation; raw logits).
     feature_size:
-        Feature map size in the CNN decoder.
-    hidden_size:
-        ViT encoder hidden / embedding dimension.
-    mlp_dim:
-        ViT encoder MLP intermediate dimension.
+        Base feature map channel count in the CNN decoder.
+        Swin-Tiny: 48, Swin-Small: 96, Swin-Base: 128.
+    depths:
+        Number of Swin Transformer blocks per stage.
     num_heads:
-        Number of self-attention heads (must divide *hidden_size*).
-    pos_embed:
-        Positional embedding type: ``"conv"`` (default) or ``"perceptron"``.
-    dropout_rate:
-        Dropout probability applied in the ViT encoder.
+        Number of attention heads per stage (must be consistent with
+        ``feature_size * 2^stage`` being divisible by the head count).
+    drop_rate:
+        Dropout probability in the Swin encoder.
+    attn_drop_rate:
+        Attention dropout probability.
+    use_checkpoint:
+        Enable gradient checkpointing to reduce GPU memory at the cost of
+        slightly slower training.
+    weights_path:
+        Optional path to MONAI SSL pretrained weights (``.pt`` file from the
+        MONAI Model Zoo).  When provided, ``model.load_from(weights)`` is
+        called before returning, initialising the Swin encoder from
+        self-supervised pretraining.
 
     Returns
     -------
@@ -64,35 +77,36 @@ def build_unetr(
     Raises
     ------
     ValueError
-        If *img_size* is not divisible by 16.
+        If *img_size* is not divisible by 32.
     """
-    if img_size % 16 != 0:
+    if img_size % 32 != 0:
         raise ValueError(
-            f"img_size must be divisible by 16 (ViT patch size), got {img_size}"
+            f"img_size must be divisible by 32 (Swin hierarchy), got {img_size}"
         )
 
-    model = UNETR(
+    model = SwinUNETR(
+        img_size=(img_size, img_size),
         in_channels=in_channels,
         out_channels=out_channels,
-        img_size=(img_size, img_size),
         feature_size=feature_size,
-        hidden_size=hidden_size,
-        mlp_dim=mlp_dim,
+        depths=depths,
         num_heads=num_heads,
-        pos_embed=pos_embed,
         norm_name="instance",
-        dropout_rate=dropout_rate,
+        drop_rate=drop_rate,
+        attn_drop_rate=attn_drop_rate,
+        use_checkpoint=use_checkpoint,
         spatial_dims=2,
     )
+
+    if weights_path is not None:
+        w = torch.load(str(weights_path), map_location="cpu")
+        model.load_from(w)
+        logger.info("SwinUNETR: loaded pretrained SSL weights from %s", weights_path)
+
     n_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
     logger.info(
-        "UNETR: img_size=%d  in_ch=%d  out_ch=%d  hidden=%d  heads=%d  params=%d",
-        img_size,
-        in_channels,
-        out_channels,
-        hidden_size,
-        num_heads,
-        n_params,
+        "SwinUNETR: img_size=%d  in_ch=%d  out_ch=%d  feature_size=%d  params=%d",
+        img_size, in_channels, out_channels, feature_size, n_params,
     )
     return model
 

@@ -26,7 +26,8 @@ dependencies = [
     "torchvision>=0.17",
     "monai>=1.3",
     "timm>=0.9",
-    "transformers>=4.40", # ViT-MAE
+    "transformers>=4.40",
+    "lightning>=2.2",
     # SSL / representation learning
     "einops>=0.7",
     # Unsupervised analysis

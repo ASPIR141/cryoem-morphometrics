@@ -12,15 +12,13 @@ from pathlib import Path
 
 import click
 import numpy as np
+from monai.transforms import Compose
 from tqdm import tqdm
 
 from src.utils.config import PipelineConfig, load_config
+from src.utils.plots import plot_qa_gallery
 from src.utils.reporting import save_noise_report
 from src.utils.seed import seed_everything
-
-from monai.transforms import Compose
-
-from src.utils.plots import plot_qa_gallery
 
 from .background import BackgroundSubtraction
 from .clahe import CLAHEAndNormalize
