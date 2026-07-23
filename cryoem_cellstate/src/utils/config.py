@@ -75,23 +75,23 @@ class ClassicalSegConfig(BaseModel):
     watershed: bool = True
 
 
-class SwinUNETRConfig(BaseModel):
-    feature_size: int = 48
-    depths: list[int] = [2, 2, 2, 2]
-    num_heads: list[int] = [3, 6, 12, 24]
-    drop_rate: float = 0.0
-    attn_drop_rate: float = 0.0
-    use_checkpoint: bool = False
+class Vista2DConfig(BaseModel):
+    hf_repo: str = "MONAI/vista2d"
+    hf_revision: str = "0.4.0"
+    cache_dir: str = "~/.cache/monai/vista2d"
+    roi_size: list[int] = [256, 256]
+    sw_batch_size: int = 4
+    overlap: float = 0.25
 
 
-class UNetConfig(BaseModel):
+class SegmentationModelConfig(BaseModel):
     in_channels: int = 1
     num_classes: int = 1
     lr: float = 1e-4
     batch_size: int = 4
     epochs: int = 50
     val_fraction: float = 0.15
-    swin_unetr: SwinUNETRConfig = SwinUNETRConfig()
+    vista2d: Vista2DConfig = Vista2DConfig()
 
 
 class CropCellsConfig(BaseModel):
@@ -103,7 +103,7 @@ class CropCellsConfig(BaseModel):
 
 class SegmentationConfig(BaseModel):
     classical: ClassicalSegConfig = ClassicalSegConfig()
-    unet: UNetConfig = UNetConfig()
+    segmentation_model: SegmentationModelConfig = SegmentationModelConfig()
     crop_cells: CropCellsConfig = CropCellsConfig()
 
 

@@ -1,21 +1,24 @@
-"""Run Swin UNETR inference on all images in ``data/processed/`` (or a custom dir).
+"""Run VISTA2D inference on all images in ``data/processed/`` (or a custom dir).
 
-Loads a trained Swin UNETR Lightning checkpoint, applies the same deterministic
+Loads a fine-tuned VISTA2D Lightning checkpoint, applies the same deterministic
 MONAI transform pipeline used during validation, and writes binary masks to
 ``data/masks/``.
+
+VISTA2D is a MONAI generalist cell-segmentation foundation model built on
+SAM ViT-B and fine-tuned on ~15 K public microscopy images.
 
 Usage::
 
     # From repo root
-    python cryoem_cellstate/scripts/run_unetr_segmentation.py \\
+    python cryoem_cellstate/scripts/run_vista2d_segmentation.py \\
         --config cryoem_cellstate/configs/default.yaml \\
-        --checkpoint results/seg_checkpoints/best_swin_unetr.ckpt
+        --checkpoint results/seg_checkpoints/best_vista2d.ckpt
 
     # Override input/output dirs
-    python cryoem_cellstate/scripts/run_unetr_segmentation.py \\
+    python cryoem_cellstate/scripts/run_vista2d_segmentation.py \\
         --input-dir data/processed \\
         --output-dir data/masks \\
-        --checkpoint results/seg_checkpoints/best_swin_unetr.ckpt
+        --checkpoint results/seg_checkpoints/best_vista2d.ckpt
 """
 
 from __future__ import annotations
@@ -42,13 +45,13 @@ from monai.transforms import (
 )
 
 from src.preprocessing.dataset import CryoEMRawDataset
-from src.segmentation.train_unet_lightning import SwinUNETRLightningModule
+from src.segmentation.train_vista2d_lightning import Vista2DLightningModule
 from src.utils.config import get_device, load_config
 from src.utils.seed import seed_everything
 
 logger = logging.getLogger(__name__)
 
-_CROP_SIZE = 256  # must match training CROP_SIZE (divisible by 32)
+_CROP_SIZE = 256  # sliding-window ROI size (must match training CROP_SIZE)
 
 
 def _inference_transform(img_size: int) -> Compose:
@@ -67,17 +70,19 @@ def run_inference(
     device: torch.device,
     img_size: int,
     output_dir: Path,
+    sw_batch_size: int = 4,
+    overlap: float = 0.25,
     threshold: float = 0.5,
 ) -> None:
-    """Run Swin UNETR inference with sliding-window inferer and save binary masks."""
+    """Run VISTA2D inference with sliding-window inferer and save binary masks."""
     output_dir.mkdir(parents=True, exist_ok=True)
 
     sigmoid = Activations(sigmoid=True)
     binarise = AsDiscrete(threshold=threshold)
     inferer = SlidingWindowInferer(
         roi_size=(img_size, img_size),
-        sw_batch_size=4,
-        overlap=0.25,
+        sw_batch_size=sw_batch_size,
+        overlap=overlap,
         mode="gaussian",
     )
 
@@ -102,7 +107,7 @@ def run_inference(
 @click.option(
     "--checkpoint",
     required=True,
-    help="Path to Swin UNETR Lightning checkpoint (.ckpt).",
+    help="Path to VISTA2D Lightning checkpoint (.ckpt).",
 )
 @click.option("--input-dir", default=None, help="Images to segment. Defaults to data.processed_dir.")
 @click.option("--output-dir", default=None, help="Output mask directory. Defaults to data.masks_dir.")
@@ -116,7 +121,7 @@ def main(
     batch_size: int,
     threshold: float,
 ) -> None:
-    """Segment all images with a trained Swin UNETR and write masks."""
+    """Segment all images with a fine-tuned VISTA2D checkpoint and write masks."""
     logging.basicConfig(level=logging.INFO, format="%(levelname)s %(name)s: %(message)s")
 
     cfg = load_config(config)
@@ -131,12 +136,13 @@ def main(
         logger.error("Checkpoint not found: %s", ckpt_path)
         return
 
-    module = SwinUNETRLightningModule.load_from_checkpoint(
+    module = Vista2DLightningModule.load_from_checkpoint(
         str(ckpt_path), cfg=cfg, crop_size=_CROP_SIZE
     )
     model = module.model.to(device)
-    logger.info("Loaded Swin UNETR checkpoint from %s", ckpt_path)
+    logger.info("Loaded VISTA2D checkpoint from %s", ckpt_path)
 
+    vista_cfg = cfg.segmentation.segmentation_model.vista2d  # type: ignore[attr-defined]
     dataset = CryoEMRawDataset(
         raw_dir=in_path,
         transform=_inference_transform(_CROP_SIZE),
@@ -146,9 +152,17 @@ def main(
         return
 
     loader = DataLoader(dataset, batch_size=batch_size, shuffle=False, num_workers=2)
-    run_inference(model=model, loader=loader, device=device,
-                  img_size=_CROP_SIZE, output_dir=out_path, threshold=threshold)
-    logger.info("Swin UNETR segmentation complete — masks written to %s", out_path)
+    run_inference(
+        model=model,
+        loader=loader,
+        device=device,
+        img_size=_CROP_SIZE,
+        output_dir=out_path,
+        sw_batch_size=vista_cfg.sw_batch_size,
+        overlap=vista_cfg.overlap,
+        threshold=threshold,
+    )
+    logger.info("VISTA2D segmentation complete — masks written to %s", out_path)
 
 
 if __name__ == "__main__":

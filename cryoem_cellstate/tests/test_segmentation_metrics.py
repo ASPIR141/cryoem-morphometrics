@@ -88,17 +88,50 @@ class TestClassicalSegmentation:
 
 
 class TestMonaiUnet:
-    def test_unet_output_shape(self) -> None:
-        from src.segmentation.unet import build_unet
+    def test_vista2d_wrapper_output_shape(self) -> None:
+        """Test that _Vista2DWrapper produces (B,1,H,W) logits without HF download."""
+        import types
+        import torch.nn as nn
+        from src.segmentation.vista2d import _Vista2DWrapper
 
-        model = build_unet(spatial_dims=2, in_channels=1, out_channels=1)
+        # Build a minimal mock SAM with the three sub-modules _Vista2DWrapper uses
+        class _FakeEncoder(nn.Module):
+            def forward(self, x: torch.Tensor) -> torch.Tensor:
+                # SAM encoder returns (B, 256, 64, 64)
+                return torch.zeros(x.shape[0], 256, 64, 64, device=x.device)
+
+        class _FakePromptEncoder(nn.Module):
+            def forward(self, points, boxes, masks):  # noqa: ANN001
+                B = 1
+                return (
+                    torch.zeros(B, 0, 256),   # sparse
+                    torch.zeros(B, 256, 64, 64),  # dense
+                )
+
+            def get_dense_pe(self) -> torch.Tensor:
+                return torch.zeros(1, 256, 64, 64)
+
+        class _FakeMaskDecoder(nn.Module):
+            def forward(self, image_embeddings, image_pe,  # noqa: ANN001
+                        sparse_prompt_embeddings, dense_prompt_embeddings,
+                        multimask_output):  # noqa: ANN001
+                B = image_embeddings.shape[0]
+                return torch.zeros(B, 1, 256, 256), None
+
+        sam_mock = types.SimpleNamespace(
+            image_encoder=_FakeEncoder(),
+            mask_decoder=_FakeMaskDecoder(),
+            prompt_encoder=_FakePromptEncoder(),
+        )
+
+        model = _Vista2DWrapper(sam_mock)  # type: ignore[arg-type]
         x = torch.randn(2, 1, 256, 256)
         with torch.no_grad():
             out = model(x)
         assert out.shape == (2, 1, 256, 256)
 
     def test_dice_ce_loss_scalar(self) -> None:
-        from src.segmentation.unet import build_loss
+        from src.segmentation.vista2d import build_loss
 
         criterion = build_loss(sigmoid=True)
         logits = torch.randn(2, 1, 64, 64)

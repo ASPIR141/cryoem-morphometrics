@@ -39,21 +39,22 @@ segmentation:
     min_cell_area: 500    # pixels
     max_cell_area: 50000
     watershed: true
-  unet:
+  segmentation_model:
     in_channels: 1
     num_classes: 1
     lr: 1.0e-4
     batch_size: 4
     epochs: 50
     val_fraction: 0.15
-    # Swin UNETR replaces plain UNETR (img_size must be divisible by 32)
-    swin_unetr:
-      feature_size: 48          # Swin-Tiny: 48 | Swin-Small: 96
-      depths: [2, 2, 2, 2]      # Transformer blocks per stage
-      num_heads: [3, 6, 12, 24] # Attention heads per stage
-      drop_rate: 0.0
-      attn_drop_rate: 0.0
-      use_checkpoint: false     # gradient checkpointing (saves GPU memory)
+    # VISTA2D — pretrained SAM ViT-B foundation model for cell segmentation
+    # Weights are downloaded from HuggingFace Hub on first use.
+    vista2d:
+      hf_repo: "MONAI/vista2d"        # HuggingFace repository ID
+      hf_revision: "0.4.0"             # pinned model version
+      cache_dir: "~/.cache/monai/vista2d"  # local weight cache
+      roi_size: [256, 256]             # sliding-window tile size
+      sw_batch_size: 4                 # tiles per GPU batch
+      overlap: 0.25                    # tile overlap fraction
   crop_cells:
     min_area: 500
     max_aspect_ratio: 4.0
@@ -64,7 +65,7 @@ segmentation:
 # active_model controls which model run_ssl.py uses by default.
 # Training is always done via the dedicated train_*_lightning.py scripts.
 ssl:
-  active_model: "mae"           # "mae" | "cryo-ief" | "rotnet"
+  active_model: "cryo-ief"           # "mae" | "cryo-ief" | "rotnet"
   checkpoints_dir: "results/ssl_checkpoints"
 
   # -- MAE-ViT (pretrained, no local training) ----------------------------------

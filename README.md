@@ -53,10 +53,10 @@ Place raw CryoEM images into `cryoem_cellstate/data/raw/`.
 | Component | File | Description |
 |-----------|------|-------------|
 | Classical | `classical.py` | `ClassicalSegmentation(Transform)` — Otsu/adaptive → cleanup → watershed |
-| Swin UNETR model | `unet.py` | `build_swin_unetr()` — MONAI `SwinUNETR` (Swin-Transformer encoder + CNN decoder, 2-D, 256×256) |
-| Training | `train_unet_lightning.py` | `SwinUNETRLightningModule` + `SwinUNETRDataModule`; saves `best_swin_unetr.ckpt` |
-| Inference driver | `run_segmentation.py` | Classical (default) or Swin UNETR (`--use-swin-unetr`) + cell cropping |
-| Inference script | `scripts/run_unetr_segmentation.py` | Standalone Swin UNETR inference with `SlidingWindowInferer` |
+| VISTA2D model | `vista2d.py` | `build_vista2d()` — pretrained MONAI VISTA2D (SAM ViT-B + fine-tuned adapter, 2-D, 256×256 sliding window) |
+| Training | `train_vista2d_lightning.py` | `Vista2DLightningModule` + `Vista2DDataModule`; saves `best_vista2d.ckpt` |
+| Inference driver | `run_segmentation.py` | Classical (default) or VISTA2D (`--use-vista2d`) + cell cropping |
+| Inference script | `scripts/run_vista2d_segmentation.py` | Standalone VISTA2D inference with `SlidingWindowInferer` |
 | Evaluation | `evaluate_segmentation.py` | `DiceMetric`, `MeanIoU`, `HausdorffDistanceMetric` vs CVAT GT |
 | Cropper | `crop_cells.py` | `CellCropper(Transform)` — per-cell crops + `cells.parquet` catalogue |
 
@@ -115,34 +115,31 @@ uv run --directory cryoem_cellstate -m src.preprocessing.run_preprocess --raw-di
 uv run --directory cryoem_cellstate -m src.segmentation.run_segmentation
 ```
 
-### Stage 2b — Train Swin UNETR
+### Stage 2b — Fine-tune VISTA2D
 ```bash
-# Fine-tune from scratch:
-uv run --directory cryoem_cellstate -m src.segmentation.train_unet_lightning
-
-# Fine-tune from MONAI SSL pretrained weights:
-uv run --directory cryoem_cellstate -m src.segmentation.train_unet_lightning \
-    --pretrained-weights /path/to/swin_unetr_ssl.pt
+# Fine-tune on your CryoEM dataset (downloads SAM + VISTA2D weights from HuggingFace on first run):
+uv run --directory cryoem_cellstate -m src.segmentation.train_vista2d_lightning
 
 # With GPU and custom epochs:
-uv run --directory cryoem_cellstate -m src.segmentation.train_unet_lightning \
-    --max-epochs 100 --accelerator gpu --devices 1
+uv run --directory cryoem_cellstate -m src.segmentation.train_vista2d_lightning \
+    --max-epochs 50 --accelerator gpu --devices 1
 ```
-Saves checkpoint to `results/seg_checkpoints/best_swin_unetr.ckpt`.
+Saves checkpoint to `results/seg_checkpoints/best_vista2d.ckpt`.
 
-> **Pretrained SSL weights** for MONAI SwinUNETR are available from the
-> [MONAI Model Zoo](https://github.com/Project-MONAI/MONAI-extra-test-data/releases).
-> Pass the downloaded `.pt` file via `--pretrained-weights`.
+> **Pretrained weights** are downloaded automatically from
+> [`MONAI/vista2d @ 0.4.0`](https://huggingface.co/MONAI/vista2d/tree/0.4.0)
+> on first run and cached in `~/.cache/monai/vista2d`.
+> An internet connection is required only on the first run.
 
-### Stage 2c — Swin UNETR inference
+### Stage 2c — VISTA2D inference
 ```bash
 # Via run_segmentation (also crops cells):
 uv run --directory cryoem_cellstate -m src.segmentation.run_segmentation \
-    --use-swin-unetr --checkpoint results/seg_checkpoints/best_swin_unetr.ckpt
+    --use-vista2d --checkpoint results/seg_checkpoints/best_vista2d.ckpt
 
 # Standalone inference script:
-python cryoem_cellstate/scripts/run_unetr_segmentation.py \
-    --checkpoint results/seg_checkpoints/best_swin_unetr.ckpt
+python cryoem_cellstate/scripts/run_vista2d_segmentation.py \
+    --checkpoint results/seg_checkpoints/best_vista2d.ckpt
 ```
 
 ### Stage 3 — Extract embeddings (pretrained, no training needed)
@@ -208,8 +205,9 @@ Key parameters:
 | Section | Key | Default | Description |
 |---------|-----|---------|-------------|
 | `preprocessing.fft_filter` | `low_cutoff` / `high_cutoff` | 0.02 / 0.40 | Band-pass cutoffs (Nyquist fraction) |
-| `segmentation.unet.swin_unetr` | `feature_size` | 48 | Swin-Tiny base channels (48/96/128) |
-| `segmentation.unet.swin_unetr` | `depths` | [2,2,2,2] | Transformer blocks per stage |
+| `segmentation.segmentation_model.vista2d` | `hf_repo` | `MONAI/vista2d` | HuggingFace repository for VISTA2D weights |
+| `segmentation.segmentation_model.vista2d` | `hf_revision` | `0.4.0` | Pinned model version |
+| `segmentation.segmentation_model.vista2d` | `roi_size` | `[256, 256]` | Sliding-window tile size |
 | `ssl.active_model` | — | `mae` | Default model for `run_ssl.py` |
 | `ssl.mae` | `backbone` | `hf_hub:timm/vit_base_patch16_224.mae_in1k` | Pretrained MAE ViT-Base from timm Hub |
 | `ssl.rotnet` | `backbone` | `hf_hub:timm/vit_base_patch16_224.dino` | Pretrained DINO ViT-Base from timm Hub |
@@ -228,7 +226,7 @@ results/
 │   ├── noise/               ← PSD plots, SNR histograms, noise_metrics.csv
 │   └── qa_gallery.png       ← Before/after preprocessing grid
 ├── seg_checkpoints/
-│   └── best_swin_unetr.ckpt ← Fine-tuned Swin UNETR checkpoint (Stage 2b)
+│   └── best_vista2d.ckpt    ← Fine-tuned VISTA2D checkpoint (Stage 2b)
 ├── embeddings.npy           ← SSL embedding matrix (N × D) from Stage 3
 ├── morphometrics.parquet    ← Per-cell morphometric features from Stage 4
 ├── clustering/
@@ -244,3 +242,14 @@ results/
 │   └── fig7_diffusion.png
 └── report.md
 ```
+
+# TODO
+Stage 1: Advance the Noise Modeling (noise_stats.py). Don't just compute a generic Gaussian+Poisson model. Specifically implement a Shot-Noise (Poisson) simulation framework that models photon-starved regimes. Calculate the exact Signal-to-Noise Ratio (SNR) transition threshold where classical Otsu thresholding breaks down, forcing the system to rely on semantic segmentation.
+
+Stage 1: Document the 2D FFT Band-Pass (fft_filter.py). Be ready to explain how you handle structural background artifacts (like the grid carbon edges or ice thickness variation in CryoEM) using frequency-domain masks. This perfectly mirrors how Spore.Bio isolates bacterial signatures from multi-modal optical backgrounds.
+
+Stage 2: Expand the Classical Baseline (classical.py). Make sure you can write a clean, native OpenCV/NumPy pipeline for morphological operations (using custom structuring elements for dilation, erosion, and opening). This proves you have the core computer vision engineering depth required for edge deployment. 
+
+Stage 3: Migrate the MAE-ViT training to JAX/Flax. Since you have train_mae_lightning.py in PyTorch, write a parallel version in JAX using Flax/Optax. Implement SPMD sharding over the patch embeddings using JAX's native global sharding arrays. This single architectural change will serve as the ultimate talking point for your DeepMind loop, proving you can code functional data transformations and manage TPU execution graphs seamlessly.
+
+Stage 3: Information Density & Tokenization Filtering. Treat your unlabeled cell crops as your "pretraining token database." Implement an upstream statistical filter (using your Stage 1 image entropy metrics or Stage 5 clustering densities) to prune redundant, blank, or highly artifacted crops before they ever hit the MAE-ViT encoder. This maps directly to the core responsibilities of the Gemini Data Pretraining team, showing you treat data curation as an active algorithmic science. 

@@ -2,7 +2,7 @@
 
 Chains all six stages and writes a final Markdown report.
 All SSL models (MAE, DINO, Cryo-IEF) use pretrained weights — no training step.
-Swin UNETR must be fine-tuned separately via ``train_unet_lightning.py``.
+VISTA2D must be fine-tuned separately via ``train_vista2d_lightning.py``.
 
 Usage::
 

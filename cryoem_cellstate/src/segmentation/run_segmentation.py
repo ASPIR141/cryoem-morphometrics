@@ -3,23 +3,26 @@
 Produces binary masks and cell crops using either:
 
 * **Classical** (default) — Otsu/adaptive threshold → morphological cleanup → watershed
-* **Swin UNETR** (``--use-swin-unetr``) — loads a pre-trained Swin UNETR checkpoint
-  produced by ``train_unet_lightning.py`` and runs sliding-window inference
+* **VISTA2D** (``--use-vista2d``) — loads a fine-tuned VISTA2D checkpoint
+  produced by ``train_vista2d_lightning.py`` and runs sliding-window inference
 
-Training is handled separately by ``train_unet_lightning.py``.
+VISTA2D is a MONAI generalist cell-segmentation foundation model built on
+SAM ViT-B and fine-tuned on ~15 K public microscopy images.
+
+Training is handled separately by ``train_vista2d_lightning.py``.
 
 Usage::
 
     # Classical segmentation (no trained model required):
     python -m src.segmentation.run_segmentation --config configs/default.yaml
 
-    # Swin UNETR inference with a trained checkpoint:
+    # VISTA2D inference with a fine-tuned checkpoint:
     python -m src.segmentation.run_segmentation --config configs/default.yaml \\
-        --use-swin-unetr --checkpoint results/seg_checkpoints/best_swin_unetr.ckpt
+        --use-vista2d --checkpoint results/seg_checkpoints/best_vista2d.ckpt
 
     # Also evaluate against CVAT ground truth:
     python -m src.segmentation.run_segmentation --config configs/default.yaml \\
-        --use-swin-unetr --checkpoint results/seg_checkpoints/best_swin_unetr.ckpt \\
+        --use-vista2d --checkpoint results/seg_checkpoints/best_vista2d.ckpt \\
         --evaluate
 """
 
@@ -42,7 +45,7 @@ from .crop_cells import build_cells_parquet, crop_cells
 
 logger = logging.getLogger(__name__)
 
-_SWIN_CROP_SIZE = 256  # must be divisible by 32 (Swin hierarchy)
+_VISTA2D_CROP_SIZE = 256  # sliding-window ROI size (must be divisible by 32)
 
 
 # ── Segmentation backends ─────────────────────────────────────────────────────
@@ -77,37 +80,38 @@ def _segment_classical_all(cfg: object) -> list[tuple[str, np.ndarray, np.ndarra
     return triples
 
 
-def _segment_swin_unetr_all(
+def _segment_vista2d_all(
     cfg: object,
     checkpoint: str,
 ) -> list[tuple[str, np.ndarray, np.ndarray]]:
-    """Run Swin UNETR inference on all processed images using a trained checkpoint.
+    """Run VISTA2D inference on all processed images using a fine-tuned checkpoint.
 
-    Loads the Lightning checkpoint produced by ``train_unet_lightning.py``
+    Loads the Lightning checkpoint produced by ``train_vista2d_lightning.py``
     and applies sliding-window inference via MONAI ``SlidingWindowInferer``.
     """
     from monai.inferers import SlidingWindowInferer
     from monai.transforms import Activations, AsDiscrete
 
-    from .train_unet_lightning import SwinUNETRLightningModule
+    from .train_vista2d_lightning import Vista2DLightningModule
 
     device = get_device(cfg)
     ckpt_path = Path(checkpoint)
     if not ckpt_path.exists():
-        raise FileNotFoundError(f"Swin UNETR checkpoint not found: {ckpt_path}")
+        raise FileNotFoundError(f"VISTA2D checkpoint not found: {ckpt_path}")
 
-    module = SwinUNETRLightningModule.load_from_checkpoint(
-        str(ckpt_path), cfg=cfg, crop_size=_SWIN_CROP_SIZE
+    vista_cfg = cfg.segmentation.segmentation_model.vista2d  # type: ignore[attr-defined]
+    module = Vista2DLightningModule.load_from_checkpoint(
+        str(ckpt_path), cfg=cfg, crop_size=_VISTA2D_CROP_SIZE
     )
     model = module.model.to(device).eval()
-    logger.info("Loaded Swin UNETR checkpoint from %s", ckpt_path)
+    logger.info("Loaded VISTA2D checkpoint from %s", ckpt_path)
 
     sigmoid = Activations(sigmoid=True)
     threshold = AsDiscrete(threshold=0.5)
     inferer = SlidingWindowInferer(
-        roi_size=(_SWIN_CROP_SIZE, _SWIN_CROP_SIZE),
-        sw_batch_size=4,
-        overlap=0.25,
+        roi_size=(vista_cfg.roi_size[0], vista_cfg.roi_size[1]),
+        sw_batch_size=vista_cfg.sw_batch_size,
+        overlap=vista_cfg.overlap,
         mode="gaussian",
     )
 
@@ -122,7 +126,7 @@ def _segment_swin_unetr_all(
 
     triples: list[tuple[str, np.ndarray, np.ndarray]] = []
     with torch.no_grad():
-        for img_path in tqdm(image_files, desc="Swin UNETR inference"):
+        for img_path in tqdm(image_files, desc="VISTA2D inference"):
             image = torch.load(img_path).numpy() if img_path.suffix == ".pt" else np.load(img_path)
             t = torch.from_numpy(image.astype(np.float32)).unsqueeze(0).unsqueeze(0).to(device)
             logits = inferer(t, model)
@@ -131,7 +135,7 @@ def _segment_swin_unetr_all(
             np.save(masks_path / f"{img_path.stem}.npy", mask)
             triples.append((img_path.stem, image, mask))
 
-    logger.info("Swin UNETR inference: %d images processed", len(triples))
+    logger.info("VISTA2D inference: %d images processed", len(triples))
     return triples
 
 
@@ -169,20 +173,20 @@ def _crop_all(
 @click.command()
 @click.option("--config", default=None, help="Path to YAML config override.")
 @click.option(
-    "--use-swin-unetr",
+    "--use-vista2d",
     is_flag=True,
-    help="Use trained Swin UNETR for inference instead of classical segmentation.",
+    help="Use fine-tuned VISTA2D for inference instead of classical segmentation.",
 )
 @click.option(
     "--checkpoint",
     default=None,
-    help="Swin UNETR Lightning checkpoint path (required with --use-swin-unetr).",
+    help="VISTA2D Lightning checkpoint path (required with --use-vista2d).",
 )
 @click.option("--evaluate", is_flag=True, help="Evaluate predicted masks against CVAT GT.")
 @click.option("--gt-dir", default=None, help="Override CVAT ground-truth directory.")
 def main(
     config: str | None,
-    use_swin_unetr: bool,
+    use_vista2d: bool,
     checkpoint: str | None,
     evaluate: bool,
     gt_dir: str | None,
@@ -193,10 +197,10 @@ def main(
     cfg = load_config(config)
     seed_everything(cfg.project.seed)
 
-    if use_swin_unetr:
+    if use_vista2d:
         if not checkpoint:
-            raise click.UsageError("--checkpoint is required when using --use-swin-unetr.")
-        triples = _segment_swin_unetr_all(cfg, checkpoint)
+            raise click.UsageError("--checkpoint is required when using --use-vista2d.")
+        triples = _segment_vista2d_all(cfg, checkpoint)
     else:
         triples = _segment_classical_all(cfg)
 

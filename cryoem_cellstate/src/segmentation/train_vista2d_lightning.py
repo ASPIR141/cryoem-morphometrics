@@ -1,13 +1,16 @@
-"""PyTorch Lightning training for MONAI Swin UNETR segmentation.
+"""PyTorch Lightning training for MONAI VISTA2D cell segmentation.
 
-Separates training concerns from inference.  The resulting checkpoint is
-consumed by ``run_segmentation.py --use-swin-unetr`` for inference.
+Fine-tunes the pretrained VISTA2D foundation model (SAM ViT-B +
+MONAI adapters) on our CryoEM cell dataset.  The resulting checkpoint is
+consumed by ``run_segmentation.py --use-vista2d`` for inference.
 
 Usage::
 
-    python -m src.segmentation.train_unet_lightning --config configs/default.yaml
-    python -m src.segmentation.train_unet_lightning --config configs/default.yaml \\
-        --max-epochs 100 --accelerator gpu --devices 1
+    python -m src.segmentation.train_vista2d_lightning --config configs/default.yaml
+    python -m src.segmentation.train_vista2d_lightning --config configs/default.yaml \\
+        --max-epochs 50 --accelerator gpu --devices 1
+
+Checkpoint is saved to ``results/seg_checkpoints/best_vista2d.ckpt``.
 """
 
 from __future__ import annotations
@@ -49,11 +52,11 @@ from lightning.pytorch.callbacks import (
 from src.utils.config import load_config
 from src.utils.seed import seed_everything
 
-from .unet import build_loss, build_swin_unetr
+from .vista2d import build_loss, build_vista2d
 
 logger = logging.getLogger(__name__)
 
-CROP_SIZE = 256  # must be divisible by 32 (Swin hierarchy)
+CROP_SIZE = 256  # sliding-window ROI size (must be divisible by 32)
 
 
 # ── Data helpers ──────────────────────────────────────────────────────────────
@@ -106,8 +109,8 @@ def _build_transforms(train: bool, crop_size: int = CROP_SIZE) -> Compose:
 # ── Lightning DataModule ──────────────────────────────────────────────────────
 
 
-class SwinUNETRDataModule(L.LightningDataModule):
-    """MONAI CacheDataset-backed DataModule for Swin UNETR training.
+class Vista2DDataModule(L.LightningDataModule):
+    """MONAI CacheDataset-backed DataModule for VISTA2D fine-tuning.
 
     Parameters
     ----------
@@ -120,7 +123,7 @@ class SwinUNETRDataModule(L.LightningDataModule):
     val_fraction:
         Fraction of pairs to hold out for validation.
     crop_size:
-        Spatial crop size (must be divisible by 32).
+        Spatial crop size fed to the sliding-window inferer ROI.
     num_workers:
         DataLoader worker count.
     """
@@ -191,43 +194,38 @@ class SwinUNETRDataModule(L.LightningDataModule):
 # ── Lightning Module ──────────────────────────────────────────────────────────
 
 
-class SwinUNETRLightningModule(L.LightningModule):
-    """Lightning wrapper around MONAI Swin UNETR.
+class Vista2DLightningModule(L.LightningModule):
+    """Lightning wrapper around the MONAI VISTA2D cell-segmentation model.
+
+    Loads pretrained SAM ViT-B + VISTA2D fine-tuned weights from HuggingFace
+    Hub on first instantiation, then fine-tunes on the CryoEM dataset.
 
     Logs ``train_loss``, ``val_loss``, ``val_dice``, and ``val_iou`` every epoch.
 
     Parameters
     ----------
     cfg:
-        Root pipeline config (reads ``segmentation.unet`` and
-        ``segmentation.unet.swin_unetr``).
+        Root pipeline config (reads ``segmentation.segmentation_model`` and
+        ``segmentation.segmentation_model.vista2d``).
     crop_size:
-        Input spatial size passed to :func:`~src.segmentation.unet.build_swin_unetr`.
+        Input spatial size for the sliding-window ROI.
     """
 
     def __init__(
         self,
         cfg: object,
         crop_size: int = CROP_SIZE,
-        pretrained_weights: str | None = None,
     ) -> None:
         super().__init__()
         self.save_hyperparameters(ignore=["cfg"])
 
-        seg_cfg = cfg.segmentation.unet  # type: ignore[attr-defined]
-        swin_cfg = seg_cfg.swin_unetr
+        seg_cfg = cfg.segmentation.segmentation_model  # type: ignore[attr-defined]
+        vista_cfg = seg_cfg.vista2d
 
-        self.model: nn.Module = build_swin_unetr(
-            img_size=crop_size,
-            in_channels=seg_cfg.in_channels,
-            out_channels=seg_cfg.num_classes,
-            feature_size=swin_cfg.feature_size,
-            depths=tuple(swin_cfg.depths),
-            num_heads=tuple(swin_cfg.num_heads),
-            drop_rate=swin_cfg.drop_rate,
-            attn_drop_rate=swin_cfg.attn_drop_rate,
-            use_checkpoint=swin_cfg.use_checkpoint,
-            weights_path=pretrained_weights,
+        self.model: nn.Module = build_vista2d(
+            hf_repo=vista_cfg.hf_repo,
+            hf_revision=vista_cfg.hf_revision,
+            cache_dir=vista_cfg.cache_dir,
         )
         self.criterion = build_loss(sigmoid=True)
         self._lr: float = float(seg_cfg.lr)
@@ -278,7 +276,7 @@ class SwinUNETRLightningModule(L.LightningModule):
 
 @click.command()
 @click.option("--config", default=None, help="Path to YAML config override.")
-@click.option("--max-epochs", default=None, type=int, help="Override segmentation.unet.epochs.")
+@click.option("--max-epochs", default=None, type=int, help="Override segmentation.segmentation_model.epochs.")
 @click.option("--accelerator", default="auto", show_default=True, help="Lightning accelerator.")
 @click.option("--devices", default=1, show_default=True, type=int, help="Number of devices.")
 @click.option(
@@ -286,31 +284,25 @@ class SwinUNETRLightningModule(L.LightningModule):
     default=None,
     help="Override checkpoint output directory (default: results/seg_checkpoints).",
 )
-@click.option(
-    "--pretrained-weights",
-    default=None,
-    help="Path to MONAI SSL pretrained SwinUNETR weights (.pt) to initialise before fine-tuning.",
-)
 def main(
     config: str | None,
     max_epochs: int | None,
     accelerator: str,
     devices: int,
     ckpt_dir: str | None,
-    pretrained_weights: str | None,
 ) -> None:
-    """Train MONAI Swin UNETR with PyTorch Lightning."""
+    """Fine-tune MONAI VISTA2D on CryoEM data with PyTorch Lightning."""
     logging.basicConfig(level=logging.INFO, format="%(levelname)s %(name)s: %(message)s")
 
     cfg = load_config(config)
     seed_everything(cfg.project.seed)
 
-    seg_cfg = cfg.segmentation.unet  # type: ignore[attr-defined]
+    seg_cfg = cfg.segmentation.segmentation_model  # type: ignore[attr-defined]
     epochs = max_epochs or seg_cfg.epochs
     ckpt_output = Path(ckpt_dir or (Path(cfg.project.results_dir) / "seg_checkpoints"))  # type: ignore[attr-defined]
     ckpt_output.mkdir(parents=True, exist_ok=True)
 
-    datamodule = SwinUNETRDataModule(
+    datamodule = Vista2DDataModule(
         processed_dir=cfg.data.processed_dir,  # type: ignore[attr-defined]
         masks_dir=cfg.data.masks_dir,  # type: ignore[attr-defined]
         batch_size=seg_cfg.batch_size,
@@ -318,12 +310,12 @@ def main(
         crop_size=CROP_SIZE,
     )
 
-    module = SwinUNETRLightningModule(cfg=cfg, crop_size=CROP_SIZE, pretrained_weights=pretrained_weights)
+    module = Vista2DLightningModule(cfg=cfg, crop_size=CROP_SIZE)
 
     callbacks = [
         ModelCheckpoint(
             dirpath=str(ckpt_output),
-            filename="best_swin_unetr",
+            filename="best_vista2d",
             monitor="val_dice",
             mode="max",
             save_top_k=1,
