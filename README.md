@@ -1,4 +1,4 @@
-# CryoEM Cell-State Discovery Pipeline
+# Self-Supervised Morphological Phenotype Discovery in Cryo-EM Images
 
 Automated discovery and quantification of morphological cell states in unlabeled CryoEM images of cells exposed to 400 mM sucrose.
 
@@ -69,7 +69,7 @@ Three interchangeable SSL model families, selectable via `--model` in `run_ssl.p
 |-------|-------|-------------|
 | **MAE-ViT** (primary) | `mae_vit.py` | `hf_hub:timm/vit_base_patch16_224.mae_in1k` — ImageNet MAE-pretrained ViT-Base; CLS-token embedding |
 | **Cryo-IEF** (zero-shot) | `run_ssl.py` | `westlake-repl/Cryo-IEF` from HuggingFace; CLS embedding from vision encoder |
-| **DINO ViT** (auxiliary) | `rotnet.py` | `hf_hub:timm/vit_base_patch16_224.dino` — DINO self-supervised ViT-Base; CLS-token embedding |
+| **DINOv3 ViT** (auxiliary) | `rotnet.py` | `facebook/dinov3-vitl16-pretrain-lvd1689m` — DINOv3 self-supervised ViT-Large (1024-D CLS token); requires `transformers ≥ 4.56.0` |
 
 ### Stage 4 — Morphometrics (`src/morphometrics/`)
 
@@ -150,9 +150,13 @@ uv run --directory cryoem_cellstate -m src.ssl.run_ssl --model mae
 # Cryo-IEF (westlake-repl/Cryo-IEF):
 uv run --directory cryoem_cellstate -m src.ssl.run_ssl --model cryo-ief
 
-# DINO ViT-Base (hf_hub:timm/vit_base_patch16_224.dino):
+# DINOv3 ViT-Large (facebook/dinov3-vitl16-pretrain-lvd1689m):
 uv run --directory cryoem_cellstate -m src.ssl.run_ssl --model rotnet
 ```
+
+> **DINOv3 requirement**: `transformers ≥ 4.56.0` is required for the
+> `facebook/dinov3-vitl16-pretrain-lvd1689m` model.  Install or upgrade with
+> `uv pip install "transformers>=4.56.0"`.
 
 ### Stage 4 — Morphometric features
 ```bash
@@ -210,7 +214,7 @@ Key parameters:
 | `segmentation.segmentation_model.vista2d` | `roi_size` | `[256, 256]` | Sliding-window tile size |
 | `ssl.active_model` | — | `mae` | Default model for `run_ssl.py` |
 | `ssl.mae` | `backbone` | `hf_hub:timm/vit_base_patch16_224.mae_in1k` | Pretrained MAE ViT-Base from timm Hub |
-| `ssl.rotnet` | `backbone` | `hf_hub:timm/vit_base_patch16_224.dino` | Pretrained DINO ViT-Base from timm Hub |
+| `ssl.rotnet` | `model_name` | `facebook/dinov3-vitl16-pretrain-lvd1689m` | DINOv3 ViT-Large from HuggingFace (`transformers ≥ 4.56.0`) |
 | `ssl.cryo_ief` | `model_name` | `westlake-repl/Cryo-IEF` | HuggingFace model ID |
 | `clustering.hdbscan` | `min_cluster_size` | 15 | Minimum HDBSCAN cluster size |
 
@@ -249,7 +253,5 @@ Stage 1: Advance the Noise Modeling (noise_stats.py). Don't just compute a gener
 Stage 1: Document the 2D FFT Band-Pass (fft_filter.py). Be ready to explain how you handle structural background artifacts (like the grid carbon edges or ice thickness variation in CryoEM) using frequency-domain masks. This perfectly mirrors how Spore.Bio isolates bacterial signatures from multi-modal optical backgrounds.
 
 Stage 2: Expand the Classical Baseline (classical.py). Make sure you can write a clean, native OpenCV/NumPy pipeline for morphological operations (using custom structuring elements for dilation, erosion, and opening). This proves you have the core computer vision engineering depth required for edge deployment. 
-
-Stage 3: Migrate the MAE-ViT training to JAX/Flax. Since you have train_mae_lightning.py in PyTorch, write a parallel version in JAX using Flax/Optax. Implement SPMD sharding over the patch embeddings using JAX's native global sharding arrays. This single architectural change will serve as the ultimate talking point for your DeepMind loop, proving you can code functional data transformations and manage TPU execution graphs seamlessly.
 
 Stage 3: Information Density & Tokenization Filtering. Treat your unlabeled cell crops as your "pretraining token database." Implement an upstream statistical filter (using your Stage 1 image entropy metrics or Stage 5 clustering densities) to prune redundant, blank, or highly artifacted crops before they ever hit the MAE-ViT encoder. This maps directly to the core responsibilities of the Gemini Data Pretraining team, showing you treat data curation as an active algorithmic science. 

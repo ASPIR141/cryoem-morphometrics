@@ -74,11 +74,11 @@ ssl:
     image_size: 224
     batch_size: 64
 
-  # -- DINO ViT-Base (pretrained, replaces rotation-prediction RotNet) ----------
+  # -- DINOv3 ViT-Large (pretrained via HuggingFace transformers ≥ 4.56.0) -----
   rotnet:
-    backbone: "hf_hub:timm/vit_base_patch16_224.dino"
+    model_name: "facebook/dinov3-vitl16-pretrain-lvd1689m"
     image_size: 224
-    batch_size: 64
+    batch_size: 32
 
   # -- Cryo-IEF (foundation model, zero-shot — no local training needed) -------
   cryo_ief:
@@ -117,3 +117,10 @@ evaluation:
   significance_alpha: 0.05
   figures_dir: "results/figures"
   report_path: "results/report.md"
+
+# ── Weights & Biases ─────────────────────────────────────────────────────────
+wandb:
+  enabled: true
+  project: "cryoem-cellstate"
+  entity: null          # set to your W&B username/team or leave null for default
+  log_figures: true     # upload PNG figures as wandb.Image artifacts

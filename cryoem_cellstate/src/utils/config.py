@@ -194,6 +194,16 @@ class EvaluationConfig(BaseModel):
     report_path: str = "results/report.md"
 
 
+# ── W&B ──────────────────────────────────────────────────────────────────────
+
+
+class WandbConfig(BaseModel):
+    enabled: bool = True
+    project: str = "cryoem-cellstate"
+    entity: str | None = None
+    log_figures: bool = True
+
+
 # ── Root config ───────────────────────────────────────────────────────────────
 
 
@@ -206,6 +216,7 @@ class PipelineConfig(BaseModel):
     morphometrics: MorphometricsConfig = MorphometricsConfig()
     clustering: ClusteringConfig = ClusteringConfig()
     evaluation: EvaluationConfig = EvaluationConfig()
+    wandb: WandbConfig = WandbConfig()
 
 
 # ── Loader ────────────────────────────────────────────────────────────────────

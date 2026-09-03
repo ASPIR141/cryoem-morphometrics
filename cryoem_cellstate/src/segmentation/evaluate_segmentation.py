@@ -14,6 +14,8 @@ import pandas as pd
 import torch
 from monai.metrics import DiceMetric, HausdorffDistanceMetric, MeanIoU
 
+from src.utils.wandb_logger import wandb_run as wb_run
+
 logger = logging.getLogger(__name__)
 
 
@@ -31,6 +33,8 @@ def evaluate_masks(
     gt_dir: str | Path,
     results_dir: str | Path,
     compute_hausdorff: bool = True,
+    model_name: str = "classical",
+    cfg: object | None = None,
 ) -> pd.DataFrame:
     """Compare predicted masks against CVAT ground-truth masks.
 
@@ -47,6 +51,12 @@ def evaluate_masks(
         Output directory for ``segmentation_metrics.csv``.
     compute_hausdorff:
         Whether to include Hausdorff distance (slower; requires non-empty masks).
+    model_name:
+        Name of the segmentation model (``"classical"`` or ``"vista2d"``); used
+        as a W&B config tag so runs can be compared across models.
+    cfg:
+        Root pipeline config. When provided and ``cfg.wandb.enabled`` is true,
+        results are logged to Weights & Biases.
 
     Returns
     -------
@@ -123,5 +133,16 @@ def evaluate_masks(
         summary = df[num_cols].mean()
         logger.info("Segmentation evaluation (mean): %s", summary.to_dict())
         df.to_csv(out_dir / "segmentation_metrics.csv", index=False)
+
+    # ── Log to W&B ────────────────────────────────────────────────────────────
+    if cfg is not None and not df.empty:
+        with wb_run(
+            cfg,
+            job_type="eval",
+            run_name=f"seg-eval-{model_name}",
+            tags=["segmentation", "evaluation", model_name],
+            extra_config={"seg_model": model_name},
+        ) as run:
+            run.log_segmentation_metrics(df, model_name=model_name)
 
     return df

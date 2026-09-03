@@ -45,6 +45,7 @@ dependencies = [
     "seaborn>=0.13",
     "tqdm>=4.66",
     "pydantic>=2.12.5",
+    "wandb>=0.29.0",
 ]
 
 [project.optional-dependencies]
@@ -67,3 +68,6 @@ ignore = ["ANN101", "ANN102"]
 testpaths = ["cryoem_cellstate/tests"]
 pythonpath = ["cryoem_cellstate"]   # makes "from src.xxx import yyy" resolve
 addopts = "-v --tb=short"
+
+[tool.hatch.metadata]
+allow-direct-references = true

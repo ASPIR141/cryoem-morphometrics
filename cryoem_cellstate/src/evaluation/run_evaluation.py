@@ -16,6 +16,7 @@ import pandas as pd
 
 from src.utils.config import load_config
 from src.utils.seed import seed_everything
+from src.utils.wandb_logger import wandb_run as wb_run
 
 from .figures import (
     figure3_size_entropy_histograms,
@@ -153,6 +154,36 @@ def run_evaluation(cfg: object) -> dict[str, object]:
     pd.DataFrame([metrics_summary]).to_csv(figs_dir / "eval_summary.csv", index=False)
     logger.info("Stage 6 complete — figures saved to %s", figs_dir)
 
+    # ── Log to W&B ────────────────────────────────────────────────────────────
+    ssl_model: str = getattr(getattr(cfg, "ssl", None), "active_model", "unknown")
+    with wb_run(
+        cfg,
+        job_type="eval",
+        run_name=f"evaluation-{ssl_model}",
+        tags=["evaluation", "clustering", ssl_model],
+        extra_config={"ssl_model": ssl_model},
+    ) as run:
+        run.log_cluster_metrics(
+            quality=quality,
+            stability=stability,
+            n_clusters=metrics_summary["n_clusters"],  # type: ignore[arg-type]
+            n_cells=n_min,
+            noise_fraction=metrics_summary["noise_fraction"],  # type: ignore[arg-type]
+            ssl_model=ssl_model,
+        )
+        run.log_anova_table(anova_df)
+        # Upload all pipeline figures
+        run.log_figures_dir(
+            figs_dir,
+            captions={
+                "fig3_histograms.png": "Cell size and entropy distributions",
+                "fig4_umap_hdbscan.png": "UMAP — HDBSCAN clusters",
+                "fig5_boxplots.png": "Per-cluster morphometric boxplots",
+                "fig6_significance.png": "ANOVA significance heatmap",
+                "fig7_diffusion.png": "Pseudo-temporal diffusion map",
+            },
+        )
+
     return {"quality": quality, "stability": stability, "anova": anova_df, "state_map": state_map}
 
 
@@ -185,7 +216,7 @@ def main(config: str | None, seg_eval: bool, gt_dir: str | None) -> None:
         if not gt_path.exists():
             logger.warning("CVAT GT dir not found: %s — skipping segmentation eval", gt_path)
         else:
-            seg_df = evaluate_masks(pred_dir, gt_path, results_dir)
+            seg_df = evaluate_masks(pred_dir, gt_path, results_dir, model_name="classical", cfg=cfg)
             if not seg_df.empty:
                 logger.info(
                     "Segmentation — mean Dice=%.4f  mean IoU=%.4f",

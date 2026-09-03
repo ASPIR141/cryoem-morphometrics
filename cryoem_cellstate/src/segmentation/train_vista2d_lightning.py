@@ -48,9 +48,11 @@ from lightning.pytorch.callbacks import (
     LearningRateMonitor,
     ModelCheckpoint,
 )
+from lightning.pytorch.loggers import WandbLogger
 
 from src.utils.config import load_config
 from src.utils.seed import seed_everything
+from src.utils.wandb_logger import WandbRun
 
 from .vista2d import build_loss, build_vista2d
 
@@ -325,16 +327,68 @@ def main(
         LearningRateMonitor(logging_interval="epoch"),
     ]
 
+    # ── W&B logger ────────────────────────────────────────────────────────────
+    wb_cfg = cfg.wandb  # type: ignore[attr-defined]
+    loggers: list = []
+    if wb_cfg.enabled:
+        try:
+            wandb_logger = WandbLogger(
+                project=wb_cfg.project,
+                entity=wb_cfg.entity or None,
+                name="vista2d-finetune",
+                tags=["segmentation", "vista2d"],
+                job_type="train",
+                log_model=False,  # we handle artifact upload manually below
+                config={
+                    "epochs": epochs,
+                    "lr": seg_cfg.lr,
+                    "batch_size": seg_cfg.batch_size,
+                    "crop_size": CROP_SIZE,
+                    "backbone": "SAM-ViT-B+VISTA2D",
+                    "seg_model": "vista2d",
+                },
+            )
+            loggers.append(wandb_logger)
+            logger.info("W&B training logger initialised")
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("Could not initialise WandbLogger (training will continue): %s", exc)
+
     trainer = L.Trainer(
         max_epochs=epochs,
         accelerator=accelerator,
         devices=devices,
         callbacks=callbacks,
+        loggers=loggers if loggers else True,  # True = default TensorBoard/CSV logger
         log_every_n_steps=1,
         enable_progress_bar=True,
     )
     trainer.fit(module, datamodule=datamodule)
     logger.info("Training complete. Best checkpoint saved to %s", ckpt_output)
+
+    # ── Upload best checkpoint as W&B artifact ────────────────────────────────
+    if wb_cfg.enabled and loggers:
+        best_ckpt = ckpt_output / "best_vista2d.ckpt"
+        wb_run = WandbRun.__new__(WandbRun)
+        wb_run._enabled = True  # noqa: SLF001
+        wb_run._log_figures = wb_cfg.log_figures  # noqa: SLF001
+        # Re-use the already active wandb run created by WandbLogger
+        try:
+            import wandb  # noqa: PLC0415
+
+            wb_run._run = wandb.run  # noqa: SLF001
+            wb_run.log_checkpoint_artifact(
+                best_ckpt,
+                name="vista2d-best-checkpoint",
+                artifact_type="model",
+                metadata={
+                    "monitor": "val_dice",
+                    "epochs": epochs,
+                    "lr": seg_cfg.lr,
+                },
+            )
+            wandb.finish()
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("Could not upload checkpoint artifact to W&B: %s", exc)
 
 
 if __name__ == "__main__":

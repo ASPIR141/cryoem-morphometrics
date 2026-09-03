@@ -6,8 +6,8 @@ Supports three model families, selected via ``--model``:
   CLS-token embedding; no local training required.
 * **cryo-ief** — zero-shot ``westlake-repl/Cryo-IEF`` from HuggingFace Hub;
   no local training required.
-* **rotnet** — pretrained ``hf_hub:timm/vit_base_patch16_224.dino``;
-  CLS-token embedding; no local training required.
+* **rotnet** — pretrained ``facebook/dinov3-vitl16-pretrain-lvd1689m`` (DINOv3 ViT-Large
+  via HuggingFace ``transformers`` ≥ 4.56.0); CLS-token embedding (1024-D); no local training required.
 
 Usage::
 
@@ -19,6 +19,7 @@ Usage::
 from __future__ import annotations
 
 import logging
+import time
 from pathlib import Path
 
 import click
@@ -30,6 +31,7 @@ from torch.utils.data import DataLoader, Dataset
 
 from src.utils.config import get_device, load_config
 from src.utils.seed import seed_everything
+from src.utils.wandb_logger import wandb_run as wb_run
 
 logger = logging.getLogger(__name__)
 
@@ -161,13 +163,13 @@ def _extract_rotnet(
     loader: DataLoader,
     device: torch.device,
 ) -> np.ndarray:
-    """Extract CLS-token embeddings using the pretrained DINO ViT-Base."""
+    """Extract CLS-token embeddings using the pretrained DINOv3 ViT-Large."""
     import torch.nn.functional as F
 
-    from .rotnet import DinoViT
+    from .rotnet import DinoV3ViT
 
     rotnet_cfg = cfg.ssl.rotnet  # type: ignore[attr-defined]
-    model = DinoViT(backbone=rotnet_cfg.backbone).to(device).eval()
+    model = DinoV3ViT(model_name=rotnet_cfg.model_name).to(device).eval()
     img_size: int = rotnet_cfg.image_size
 
     parts: list[np.ndarray] = []
@@ -218,6 +220,7 @@ def extract_embeddings(
     )
     loader = DataLoader(dataset, batch_size=64, shuffle=False, num_workers=4)
 
+    t0 = time.perf_counter()
     if model == "mae":
         embeddings = _extract_mae(cfg, loader, device)
     elif model == "cryo-ief":
@@ -226,11 +229,29 @@ def extract_embeddings(
         embeddings = _extract_rotnet(cfg, loader, device)
     else:
         raise ValueError(f"Unknown model: {model!r}")
+    elapsed = time.perf_counter() - t0
 
     out_path = Path(cfg.project.results_dir) / "embeddings.npy"  # type: ignore[attr-defined]
     out_path.parent.mkdir(parents=True, exist_ok=True)
     np.save(out_path, embeddings)
     logger.info("Saved embeddings %s → %s", embeddings.shape, out_path)
+
+    # ── Log to W&B ────────────────────────────────────────────────────────────
+    with wb_run(
+        cfg,
+        job_type="embedding_extraction",
+        run_name=f"ssl-{model}",
+        tags=["ssl", model],
+        extra_config={"ssl_model": model},
+    ) as run:
+        run.log_ssl_metrics(
+            model_name=model,
+            n_cells=len(cells_df),
+            embedding_dim=int(embeddings.shape[1]),
+            extraction_time_s=elapsed,
+            embeddings_path=out_path,
+        )
+
     return embeddings
 
 

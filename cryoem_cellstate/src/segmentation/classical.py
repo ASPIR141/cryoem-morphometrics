@@ -10,7 +10,7 @@ import logging
 
 import numpy as np
 from monai.transforms import Compose, Transform
-from skimage import morphology, segmentation
+from skimage import morphology
 from skimage.filters import threshold_local, threshold_otsu
 
 logger = logging.getLogger(__name__)
