@@ -46,6 +46,10 @@ dependencies = [
     "tqdm>=4.66",
     "pydantic>=2.12.5",
     "wandb>=0.29.0",
+    "cvat-cli>=2.74.1",
+    "cvat-sdk>=2.74.1",
+    "cellpose>=4.2.1.1",
+    "opencv-python-headless>=5.0.0.93",
 ]
 
 [project.optional-dependencies]
